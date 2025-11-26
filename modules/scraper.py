@@ -14,45 +14,45 @@ def fechar_popups_e_cookies(page):
     Força o fechamento de modais e cookies via JavaScript.
     Agora mais agressivo para pegar modais que aparecem com delay.
     """
-    print(Fore.YELLOW + "   🧹 Varrendo bloqueios visuais (Cookies/Modais)..." + Style.RESET_ALL)
-    
     # Pequeno delay para garantir que animações de entrada do modal iniciaram
-    page.wait_for_timeout(1000)
+    try:
+        page.wait_for_timeout(500)
+        
+        # Executa JS no navegador para destruir os elementos
+        page.evaluate("""
+            () => {
+                const removeEl = (el) => {
+                    if (el) {
+                        el.style.setProperty('display', 'none', 'important');
+                        el.style.setProperty('visibility', 'hidden', 'important');
+                        el.remove();
+                    }
+                };
 
-    # Executa JS no navegador para destruir os elementos
-    page.evaluate("""
-        () => {
-            const removeEl = (el) => {
-                if (el) {
-                    el.style.setProperty('display', 'none', 'important');
-                    el.style.setProperty('visibility', 'hidden', 'important');
-                    el.remove();
+                // 1. Banner de Cookies
+                removeEl(document.querySelector('.rodape_cookies'));
+                
+                // 2. Modal de Aviso Específico (#modalAviso)
+                const modal = document.getElementById('modalAviso');
+                if (modal) {
+                    modal.classList.remove('show');
+                    modal.style.display = 'none';
+                    removeEl(modal);
                 }
-            };
 
-            // 1. Banner de Cookies
-            removeEl(document.querySelector('.rodape_cookies'));
-            
-            // 2. Modal de Aviso Específico (#modalAviso)
-            const modal = document.getElementById('modalAviso');
-            if (modal) {
-                modal.classList.remove('show');
-                modal.style.display = 'none';
-                removeEl(modal);
+                // 3. Limpeza Genérica (Remove qualquer fundo escuro 'backdrop')
+                document.querySelectorAll('.modal-backdrop').forEach(el => removeEl(el));
+                document.querySelectorAll('.modal.show').forEach(el => removeEl(el));
+                
+                // 4. Destrava o scroll do corpo da página
+                document.body.classList.remove('modal-open');
+                document.body.style.paddingRight = '';
+                document.body.style.overflow = 'auto';
             }
-
-            // 3. Limpeza Genérica (Remove qualquer fundo escuro 'backdrop')
-            document.querySelectorAll('.modal-backdrop').forEach(el => removeEl(el));
-            document.querySelectorAll('.modal.show').forEach(el => removeEl(el));
-            
-            // 4. Destrava o scroll do corpo da página
-            document.body.classList.remove('modal-open');
-            document.body.style.paddingRight = '';
-            document.body.style.overflow = 'auto';
-        }
-    """)
-    
-    page.wait_for_timeout(500)
+        """)
+    except Exception as e:
+        # Não falha o script se der erro ao fechar popup, apenas segue
+        pass
 
 def extrair_metadados_tabela(page):
     """
@@ -62,6 +62,12 @@ def extrair_metadados_tabela(page):
     dados = {"lote": "N/A", "data": "N/A", "local": "N/A"}
     
     try:
+        # OTIMIZAÇÃO: Espera a tabela aparecer antes de ler
+        try:
+            page.wait_for_selector("table.table-sm", timeout=5000)
+        except:
+            pass # Se não aparecer em 5s, tenta ler o que tiver
+            
         # Seleciona todas as linhas da tabela de informações
         linhas = page.locator("table.table-sm tr").all()
         
@@ -80,7 +86,7 @@ def extrair_metadados_tabela(page):
                     dados["local"] = valor
                     
     except Exception as e:
-        print(Fore.RED + f"Erro ao ler tabela: {e}")
+        print(Fore.RED + f"   ⚠️ Erro ao ler tabela: {e}" + Style.RESET_ALL)
         
     return dados
 
@@ -91,22 +97,24 @@ def executar_scraping(target_url=config.URL_ALVO):
     dados_coletados = []
 
     with sync_playwright() as p:
+        print(Fore.WHITE + "   Iniciando navegador (pode levar alguns segundos)..." + Style.RESET_ALL)
         browser = p.chromium.launch(headless=True)
         context = browser.new_context()
         page = context.new_page()
         
         try:
-            print("Carregando listagem...")
+            print("   Carregando listagem principal...")
             page.goto(target_url, timeout=60000)
             
             # --- LIMPEZA INICIAL ---
+            print(Fore.YELLOW + "   🧹 Varrendo bloqueios visuais..." + Style.RESET_ALL)
             fechar_popups_e_cookies(page)
             
             # --- ESPERA PELO CONTAINER PRINCIPAL ---
             try:
-                page.wait_for_selector("#div_lotes", timeout=15000)
+                page.wait_for_selector("#div_lotes", state="visible", timeout=15000)
             except:
-                print(Fore.RED + "❌ Erro: Container '#div_lotes' não encontrado. O site pode ter mudado." + Style.RESET_ALL)
+                print(Fore.RED + "❌ Erro: Container '#div_lotes' não encontrado ou demorou demais." + Style.RESET_ALL)
                 return
 
             container_lotes = page.locator("#div_lotes")
@@ -117,7 +125,7 @@ def executar_scraping(target_url=config.URL_ALVO):
                 
                 # Verifica se o botão existe antes de tentar qualquer coisa
                 if botao_exibir.count() > 0 and botao_exibir.is_visible():
-                    print(Fore.YELLOW + "Botão 'Exibir todos' detectado. Tentando clicar..." + Style.RESET_ALL)
+                    print(Fore.YELLOW + "   Botão 'Exibir todos' detectado. Clicando..." + Style.RESET_ALL)
                     
                     try:
                         # Tenta clique normal primeiro
@@ -128,21 +136,22 @@ def executar_scraping(target_url=config.URL_ALVO):
                         fechar_popups_e_cookies(page)
                         botao_exibir.click(force=True, timeout=5000)
                     
-                    print("   ✅ Clique realizado. Aguardando carregamento AJAX...")
+                    print("   ✅ Clique realizado. Aguardando carregamento dos itens...")
+                    # Aumentei o tempo de espera pós clique para garantir que a lista carregue
                     page.wait_for_timeout(5000) 
                 else:
-                    print("Lista parece completa ou botão não visível.")
+                    print("   Lista parece completa ou botão não visível.")
             except Exception as e:
-                print(Fore.YELLOW + f"Nota: Botão 'Exibir todos' ignorado: {e}" + Style.RESET_ALL)
+                print(Fore.YELLOW + f"   Nota: Botão 'Exibir todos' ignorado: {e}" + Style.RESET_ALL)
 
             # --- COLETA DE LINKS ---
-            print("Mapeando itens dentro de '#div_lotes'...")
+            print("   Mapeando itens dentro de '#div_lotes'...")
             urls_unicas = set()
             
             # Busca cards apenas dentro da área de resultados
             cards = container_lotes.locator("div.col-md-3").all()
             
-            print(Fore.BLUE + f"Cards encontrados na área correta: {len(cards)}" + Style.RESET_ALL)
+            print(Fore.BLUE + f"   Cards encontrados na área correta: {len(cards)}" + Style.RESET_ALL)
             
             for card in cards:
                 # Busca elementos clicáveis dentro do card
@@ -168,16 +177,32 @@ def executar_scraping(target_url=config.URL_ALVO):
                 print(f"[{i+1}/{len(lista_urls)}] Acessando lote...", end="\r")
                 
                 try:
-                    page.goto(url, timeout=45000)
+                    # Aumentei o timeout geral da página
+                    page.goto(url, timeout=60000)
                     
+                    # OTIMIZAÇÃO CRÍTICA: Espera a rede acalmar (garante que AJAX carregou)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=5000)
+                    except:
+                        # Se networkidle falhar (timeout), segue o jogo, pois o conteúdo pode já estar lá
+                        pass
+
                     meta = extrair_metadados_tabela(page)
                     
                     seletor_desc = "div.bg-cinza-claro"
                     texto_desc = ""
+                    
+                    # OTIMIZAÇÃO CRÍTICA: Espera explícita pelo elemento de descrição
+                    try:
+                        # Aguarda até 5 segundos para o elemento aparecer no DOM
+                        page.wait_for_selector(seletor_desc, state="visible", timeout=5000)
+                    except:
+                        pass # Se não aparecer, vai cair no check abaixo de count() > 0
+
                     if page.locator(seletor_desc).count() > 0:
                         texto_desc = page.locator(seletor_desc).first.inner_text()
                     else:
-                        texto_desc = "Descrição não localizada."
+                        texto_desc = "Descrição não localizada (Elemento não carregou ou não existe)."
 
                     item = {
                         "url": url,
@@ -189,7 +214,10 @@ def executar_scraping(target_url=config.URL_ALVO):
                     }
                     
                     dados_coletados.append(item)
-                    print(Fore.GREEN + f"   ✅ Lote {meta['lote']} capturado." + Style.RESET_ALL)
+                    
+                    # Feedback visual melhorado
+                    resumo = item['texto_completo'][:40] + "..." if len(item['texto_completo']) > 40 else item['texto_completo']
+                    print(Fore.GREEN + f"   ✅ [{meta['lote']}] {resumo}" + Style.RESET_ALL)
 
                 except Exception as e:
                     print(Fore.RED + f"   ❌ Falha na URL {url}: {e}" + Style.RESET_ALL)
